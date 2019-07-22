@@ -1,6 +1,6 @@
 
 #include "sign.h"
-/*
+
 static inline
 uint64_t rdtsc(){
     unsigned int lo,hi;
@@ -10,121 +10,81 @@ uint64_t rdtsc(){
 #define TIC printf("\n"); uint64_t cl = rdtsc();
 #define TOC(A) printf("%s cycles = %lu \n",#A ,rdtsc() - cl); cl = rdtsc();
 
-void combine_hashes(const unsigned char *m_hash, const unsigned char *aux_hash, const unsigned char *commitment_hash, unsigned char *master_hash){
-	unsigned char input[HASH_BYTES*3];
-	
-	memcpy(input,m_hash,HASH_BYTES);
-	memcpy(input+HASH_BYTES,aux_hash,HASH_BYTES);
-	memcpy(input+2*HASH_BYTES,commitment_hash,HASH_BYTES);
-	HASH(input,3*HASH_BYTES,master_hash);
+void derive_first_challenge(unsigned char *buffer, uint16_t *c){
+	unsigned char randomness[3*ITERATIONS+50];
+	EXPAND(buffer,2*HASH_BYTES,randomness,3*ITERATIONS+50);
+
+	// generate c
+	int cur_c = 0;
+	int cur_rand = 0;
+	while(cur_c < ITERATIONS){
+		if( ( randomness[cur_rand] & FIELD_MASK) < FIELD_PRIME-1 ) {
+			c[cur_c++] = 1+( randomness[cur_rand] & FIELD_MASK);
+		}
+		cur_rand++;
+	}
+}
+
+void derive_second_challenge(unsigned char *buffer, unsigned char* b){
+	EXPAND(buffer,3*HASH_BYTES,b,ITERATIONS);
+
+	int i;
+	for(i=0; i<ITERATIONS; i++){
+		b[i] = b[i]%2;
+	}
 }
 
 void sign(const unsigned char *sk, const unsigned char *pk, const unsigned char *m, uint64_t mlen, unsigned char *sig, uint64_t *sig_len){
+	unsigned char buffer[3*HASH_BYTES];
+	unsigned char *m_hash = buffer;
+	unsigned char *commitment = buffer + HASH_BYTES;
+	unsigned char *response1_hash = commitment + HASH_BYTES;
+
 	// hash the message
-	unsigned char m_hash[HASH_BYTES];
-	HASH(m,mlen,m_hash);
+	HASH(m,mlen,buffer);
 
-	// pick random root seed and generate a tree of random seeds
-	unsigned char seed_tree[SEED_BYTES*((2<<SEED_DEPTH)-1)];
-	unsigned char *seeds = seed_tree + ((1<<SEED_DEPTH) -1)*SEED_BYTES;
-	RAND_bytes(seed_tree,SEED_BYTES);
-	generate_seed_tree(seed_tree);
+	// make commitment and copy to buffer
+	unsigned char state[STATE_BYTES] = {0};
+	commit(sk, pk, SIG_COMMITMENT(sig), state);
+	memcpy(commitment, SIG_COMMITMENT(sig), HASH_BYTES);
 
-	// generate the auxiliary information
-	unsigned char aux[SETUPS*HASH_BYTES];
-	unsigned char *helper;
-	helper = aligned_alloc(32, (HELPER_BYTES*SETUPS+31)/32*32 );
-	unsigned char indices[1<<SEED_DEPTH] = {0};
-	setup(pk, seeds , indices, aux , helper);
+	// derive c
+	uint16_t c[ITERATIONS];
+	derive_first_challenge(buffer, c);
 
-	// hash the auxiliary information
-	unsigned char aux_hash[HASH_BYTES];
-	HASH(aux,SETUPS*HASH_BYTES,aux_hash);
+	// get first response and hash to buffer
+	respond1(sk,pk,c,SIG_RESPONSE1(sig),state);
+	HASH(SIG_RESPONSE1(sig),RESPONSE1_BYTES, response1_hash);
 
-	// generate commitments for instances in index set
-	unsigned char commitments[HASH_BYTES*(1<<SEED_DEPTH)] = {0};
-	commit(pk,sk,seeds,helper,commitments);
+	// derive b
+	unsigned char b[ITERATIONS];
+	derive_second_challenge(buffer,b);
 
-	// hash commitments in merkle tree
-	unsigned char commitment_merkle_tree[((2<<SEED_DEPTH)-1)*HASH_BYTES];
-	build_tree(commitments,HASH_BYTES,SEED_DEPTH,commitment_merkle_tree);
-
-	//printf("aux_hash \n");
-	//print_hash(aux_hash);
-
-	// generate master_hash
-	combine_hashes(m_hash,aux_hash,commitment_merkle_tree,SIG_HASH(sig));
-
-	// generate indices and challenges
-	uint16_t challenges[EXECUTIONS];
-	get_indices_and_challenges(SIG_HASH(sig),indices,challenges);
-
-	// generate responses 
-	respond(pk, sk, seeds, indices, challenges, helper, SIG_RESPONSES(sig));
-
-	free(helper);
-
-	// release seeds to let verifier check auxiliary information
-	uint16_t nodes_released;
-	release_nodes(seed_tree, SEED_BYTES, SEED_DEPTH, indices, SIG_SEEDS(sig), &nodes_released );
-
-	// release commitments to let verifier reconstruct commitment_hash
-	release_nodes(commitment_merkle_tree,HASH_BYTES, SEED_DEPTH, indices, SIG_SEEDS(sig) + nodes_released*SEED_BYTES, &nodes_released);
-
-	// set signature length
-	(*sig_len) = SIG_SEEDS(0) + nodes_released*(SEED_BYTES+HASH_BYTES); 
+	// get second response
+	respond2(sk,pk,b,SIG_RESPONSE2(sig),state);
 }
 
 int verify(const unsigned char *pk, const unsigned char *m, uint64_t mlen, const unsigned char *sig){
+	unsigned char buffer[3*HASH_BYTES];
+	unsigned char *m_hash = buffer;
+	unsigned char *commitment = buffer + HASH_BYTES;
+	unsigned char *response1_hash = commitment + HASH_BYTES;
 
 	// hash the message
-	unsigned char m_hash[HASH_BYTES];
 	HASH(m,mlen,m_hash);
 
-	// generate indices and challenges
-	unsigned char indices[1<<SEED_DEPTH] = {0};
-	uint16_t challenges[EXECUTIONS];
-	get_indices_and_challenges(SIG_HASH(sig),indices,challenges);
+	// copy commitment to buffer
+	memcpy(commitment,SIG_COMMITMENT(sig),HASH_BYTES);
 
-	// reconstruct some of aux and some of commitments
-	unsigned char aux[SETUPS*HASH_BYTES] = {0};
-	unsigned char commitments[HASH_BYTES*(1<<SEED_DEPTH)] = {0};
-	unsigned char *helper;
-	helper = malloc(HELPER_BYTES*SETUPS);
-	check(pk,indices,aux,commitments,challenges,SIG_RESPONSES(sig));
+	// hash first response to buffer
+	HASH(SIG_RESPONSE1(sig),RESPONSE1_BYTES, response1_hash);
 
-	// fill the remaining seeds
-	unsigned char seed_tree[SEED_BYTES*((2<<SEED_DEPTH)-1)] = {0};
-	unsigned char *seeds = seed_tree + ((1<<SEED_DEPTH) -1)*SEED_BYTES;
-	uint16_t nodes_used = 0;
-	fill_down(seed_tree, indices, SIG_SEEDS(sig), &nodes_used);
+	// generate c and b
+	uint16_t c[ITERATIONS];
+	derive_first_challenge(buffer, c);
+	unsigned char b[ITERATIONS];
+	derive_second_challenge(buffer,b);
 
-	// regenerate aux from the seeds
-	setup(pk,seeds,indices,aux,helper);
-	free(helper);
-
-	// hash the auxiliary information
-	unsigned char aux_hash[HASH_BYTES];
-	HASH(aux,SETUPS*HASH_BYTES,aux_hash);
-
-	// get commitment root
-	unsigned char commitment_hash[HASH_BYTES];
-	hash_up(commitments,indices, SIG_SEEDS(sig)+ nodes_used*SEED_BYTES, nodes_used, commitment_hash);
-
-	//printf("aux_hash \n");
-	//print_hash(aux_hash);
-
-	// combine hashes
-	unsigned char master_hash[HASH_BYTES];
-	combine_hashes(m_hash,aux_hash,commitment_hash,master_hash);
-
-	for (int i = 0; i < HASH_BYTES; ++i)
-	{
-		if(master_hash[i] != SIG_HASH(sig)[i]){
-			return -1;
-		}
-	}
-
-	return 1;
+	// check transcript
+	return( check(pk, SIG_COMMITMENT(sig), c, SIG_RESPONSE1(sig), b, SIG_RESPONSE2(sig)) );
 }
-*/

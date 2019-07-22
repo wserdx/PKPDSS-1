@@ -1,5 +1,14 @@
+#include "zkproof.h"
 
-#include "sushsy.h"
+
+static inline
+uint64_t rdtsc(){
+    unsigned int lo,hi;
+    __asm__ __volatile__ ("rdtsc" : "=a" (lo), "=d" (hi));
+    return ((uint64_t)hi << 32) | lo;
+}
+#define TIC printf(""); uint64_t cl = rdtsc();
+#define TOC(A) printf("%s cycles = %lu \n",#A ,rdtsc() - cl); cl = rdtsc();
 
 void print_seed(const unsigned char *seed){
 	int i=0;
@@ -17,11 +26,12 @@ void print_hash(const unsigned char *hash){
 	printf("\n");
 }
 
+#define PERM_RANDOMNESS_LEN A_COLS*2
 void generate_permutation(const unsigned char *seed, unsigned char *permutation){
 	int i=0;
 
-	unsigned char permutation_randomness[A_COLS*3+50];
-	EXPAND(seed,SEED_BYTES,permutation_randomness,A_COLS*3+50);
+	unsigned char permutation_randomness[PERM_RANDOMNESS_LEN];
+	EXPAND(seed,SEED_BYTES,permutation_randomness,PERM_RANDOMNESS_LEN);
 
 	for (i = 0; i < A_COLS; i++)
 	{
@@ -44,12 +54,18 @@ void generate_permutation(const unsigned char *seed, unsigned char *permutation)
 			cur_index --;
 		}
 		cur_rand++;
+		if(cur_rand >= PERM_RANDOMNESS_LEN){
+			printf("NOT ENOUGH PERMUTATION RANDOMNESS\n");
+		}
 	}
 }
 
+
+//#define RANDOMNESS_LEN (A_COLS*3+50)
+#define VEC_RANDOMNESS_LEN A_COLS*2
 void generate_vector(const unsigned char *seed, uint16_t *vec){
-	uint16_t randomness[A_COLS*3+50];
-	EXPAND(seed,SEED_BYTES,(unsigned char *) randomness,(A_COLS*3+50)*sizeof(uint16_t));
+	uint16_t randomness[VEC_RANDOMNESS_LEN];
+	EXPAND(seed,SEED_BYTES,(unsigned char *) randomness,(VEC_RANDOMNESS_LEN*sizeof(uint16_t)));
 
 	// generate r
 	int cur_r = 0;
@@ -59,6 +75,9 @@ void generate_vector(const unsigned char *seed, uint16_t *vec){
 			vec[cur_r++] = ( randomness[cur_rand] & FIELD_MASK);
 		}
 		cur_rand++;
+		if(cur_rand >= VEC_RANDOMNESS_LEN){
+			printf("NOT ENOUGH RANDOMNESS! \n");
+		}
 	}
 }
 
@@ -80,11 +99,12 @@ void unpermute_vector(const uint16_t *vec, const unsigned char *permutation, uin
 
 void mat_mul(const uint16_t *A, uint16_t *last_col, uint16_t *vec, uint16_t *out){
 	uint32_t tmp[A_ROWS]= {0};
+	memcpy(tmp,vec,sizeof(uint16_t)*A_ROWS);
 
 	int i,j;
-	for(i=0; i<A_COLS-1; i++){
+	for(i=0; i<A_COLS-A_ROWS-1; i++){
 		for(j=0; j<A_ROWS; j++){
-			tmp[j] += A[i*A_ROWS + j]*vec[i];
+			tmp[j] += A[i*A_ROWS + j]*vec[A_ROWS+i];
 		}
 	}
 
@@ -95,7 +115,7 @@ void mat_mul(const uint16_t *A, uint16_t *last_col, uint16_t *vec, uint16_t *out
 	}
 }
 
-#define PK_RANDOMNESS_BYTES ((A_COLS + (A_COLS-1)*A_ROWS)*6+100)
+#define PK_RANDOMNESS_BYTES ((A_COLS + (A_COLS-A_ROWS-1)*A_ROWS)*6+100)
 
 void gen_v_and_A(const unsigned char *public_seed,uint16_t *v, uint16_t *A){
 	// expand public seed to get pseudorandomness to generate v and A from
@@ -125,7 +145,7 @@ void gen_v_and_A(const unsigned char *public_seed,uint16_t *v, uint16_t *A){
 
 	// generate A
 	int cur_A = 0;
-	while(cur_A < (A_COLS-1)*A_ROWS){
+	while(cur_A < (A_COLS-A_ROWS-1)*A_ROWS){
 		if( ( A_randomness[cur_rand] & FIELD_MASK) < FIELD_PRIME ) {
 			A[cur_A++] = ( A_randomness[cur_rand] & FIELD_MASK);
 		}
@@ -155,11 +175,12 @@ void get_last_col(uint16_t *v, uint16_t *A, unsigned char *permutation_seed, uin
 
 	// compute last col
 	uint32_t last_col[A_ROWS] = {0};
+	memcpy(last_col,v_pi,A_ROWS*sizeof(uint16_t));
 
 	int i,j;
-	for(i=0; i<A_COLS-1; i++){
+	for(i=0; i<A_COLS-A_ROWS-1; i++){
 		for(j=0; j<A_ROWS; j++){
-			last_col[j] += ((uint32_t) v_pi[i])*((uint32_t) A[i*A_ROWS+j]);
+			last_col[j] += ((uint32_t) v_pi[A_ROWS+i])*((uint32_t) A[i*A_ROWS+j]);
 		}
 	}
 
@@ -264,65 +285,10 @@ void commit(const unsigned char *sk, const unsigned char *pk, unsigned char *com
 		HASH(buffer_2,A_COLS*sizeof(uint16_t)+SEED_BYTES,commitments + (inst*2+1)*HASH_BYTES);
 
 		uint16_t *V_pi_sigma = (uint16_t *) buffer_2;
-		if(inst == 1){
-			printf("blabla:\n");
-			print_hash(buffer_2);
-
-			printf("V_pi_sigma:\n");
-			for (int i = 0; i < A_COLS; ++i)
-			{
-				printf("%d ", V_pi_sigma[i]);
-			}
-			printf("\n");
-		}
 	}
 
-	printf("first 4 commitments:\n");
-	print_hash(commitments + HASH_BYTES*0);
-	print_hash(commitments + HASH_BYTES*1);
-	print_hash(commitments + HASH_BYTES*2);
-	print_hash(commitments + HASH_BYTES*3);
-
+	// combine all the commitments
 	HASH(commitments,HASH_BYTES*2*ITERATIONS, commitment);
-}
-
-
-void respond1(const unsigned char *sk, const unsigned char *pk, uint16_t *c, unsigned char *response1, unsigned char *state){
-	uint16_t v[A_COLS];
-	uint16_t A[(A_COLS-1)*A_ROWS];
-	gen_v_and_A(PK_SEED(pk),v,A);
-
-	int inst;
-	for (inst =0; inst < ITERATIONS; inst++){
-		uint16_t* resp = (uint16_t *) (response1 + inst*A_COLS*sizeof(uint16_t));
-
-		memcpy(resp, STATE_R_SIGMA(state) + inst*A_COLS*sizeof(uint16_t), A_COLS*sizeof(uint16_t));
-
-		// generate sigma
-		unsigned char sigma[A_COLS];
-		generate_permutation(STATE_SEEDS(state) + SEED_BYTES*2*inst, sigma);
-
-		int i;
-		for (i=0; i<A_COLS; i++){
-			resp[i] = (resp[i] + (STATE_VPISIGMA(state) + inst*A_COLS*sizeof(uint16_t))[i]*c[inst]) % FIELD_PRIME;
-		}
-	}
-}
-
-void respond2(const unsigned char *sk, const unsigned char *pk, unsigned char *b, unsigned char *response2, unsigned char *state){
-	int inst;
-	for (inst =0; inst<ITERATIONS; inst ++){
-		memcpy(RESPONSE2_SEEDS(response2) + inst*SEED_BYTES, STATE_SEEDS(state) + (2*inst + (b[inst]%2))*SEED_BYTES , SEED_BYTES) ; 
-
-		memcpy(RESPONSE2_HASHES(response2) + inst*HASH_BYTES, STATE_HASHES(state) + (2*inst + ((b[inst]+1)%2))*HASH_BYTES , HASH_BYTES) ; 
-	}
-}
-
-void compose_perm_ab_inv(const unsigned char *a, const unsigned char *b, unsigned char *ab_inv){
-	int i;
-	for(i=0; i<A_COLS; i++){
-		ab_inv[b[i]] = a[i];
-	}
 }
 
 void compress_vecs(const uint16_t *data, int len, unsigned char *out){
@@ -345,7 +311,7 @@ void compress_vecs(const uint16_t *data, int len, unsigned char *out){
 	out[cur_out] = 0;
 	out[cur_out] |= (unsigned char) buf;
 	}
-}
+} 
 
 void decompress_vecs(const unsigned char *data, int len , uint16_t *out){
 	int cur_in = 0;
@@ -363,6 +329,62 @@ void decompress_vecs(const unsigned char *data, int len , uint16_t *out){
 			bits += 8;
 		}
 	}
+} 
+
+void respond1(const unsigned char *sk, const unsigned char *pk, uint16_t *c, unsigned char *response1, unsigned char *state){
+	uint16_t v[A_COLS];
+	uint16_t A[(A_COLS-1)*A_ROWS];
+	gen_v_and_A(PK_SEED(pk),v,A);
+
+	uint16_t response_vecs[A_COLS*ITERATIONS];
+
+	int inst;
+	for (inst =0; inst < ITERATIONS; inst++){
+		uint16_t* resp = response_vecs + A_COLS*inst;
+		uint16_t* v_pi_sigma = (uint16_t *) (STATE_VPISIGMA(state) + inst*A_COLS*sizeof(uint16_t));
+
+		memcpy(resp, STATE_R_SIGMA(state) + inst*A_COLS*sizeof(uint16_t), A_COLS*sizeof(uint16_t));
+
+		// generate sigma
+		unsigned char sigma[A_COLS];
+		generate_permutation(STATE_SEEDS(state) + SEED_BYTES*2*inst, sigma);
+
+		int i;
+		for (i=0; i<A_COLS; i++){
+			resp[i] = (resp[i] + v_pi_sigma[i]*c[inst]) % FIELD_PRIME;
+		}
+	}
+
+	compress_vecs(response_vecs,A_COLS*ITERATIONS,response1);
+}
+
+void respond2(const unsigned char *sk, const unsigned char *pk, unsigned char *b, unsigned char *response2, unsigned char *state){
+	int inst;
+	for (inst =0; inst<ITERATIONS; inst ++){
+		memcpy(RESPONSE2_SEEDS(response2) + inst*SEED_BYTES, STATE_SEEDS(state) + (2*inst + (b[inst]%2))*SEED_BYTES , SEED_BYTES) ; 
+
+		memcpy(RESPONSE2_HASHES(response2) + inst*HASH_BYTES, STATE_HASHES(state) + (2*inst + ((b[inst]+1)%2))*HASH_BYTES , HASH_BYTES) ; 
+	}
+}
+
+// check if two vectors are permutations of one another
+int is_permutation(uint16_t *A, uint16_t *B){
+	int count[FIELD_PRIME] = {0};
+
+	for (int i = 0; i < A_COLS; ++i)
+	{
+		count[A[i]] ++;
+	}
+
+	for (int i = 0; i < A_COLS; ++i)
+	{
+		count[B[i]] --;
+		if(count[B[i]] < 0){
+			return 0;
+		}
+	}
+
+	return 1;
 }
 
 int check(const unsigned char *pk, const unsigned char *commitment, const uint16_t *c, const unsigned char *response1, const unsigned char *b, const unsigned char *response2){
@@ -374,10 +396,13 @@ int check(const unsigned char *pk, const unsigned char *commitment, const uint16
 
 	unsigned char commitments[HASH_BYTES*2*ITERATIONS];
 
+	uint16_t response_vecs[A_COLS*ITERATIONS];
+	decompress_vecs(response1,A_COLS*ITERATIONS,response_vecs);
+
 	int inst;
 	for (inst=0; inst < ITERATIONS; inst ++){
 		uint16_t *X;
-		X = (uint16_t *) (response1 + sizeof(uint16_t)*A_COLS*inst);
+		X = response_vecs + inst*A_COLS;
 
 		if (b[inst] % 2 == 0){
 			unsigned char buffer_1[A_ROWS*sizeof(uint16_t) + A_COLS] = {0};
@@ -411,33 +436,16 @@ int check(const unsigned char *pk, const unsigned char *commitment, const uint16
 			int i;
 			for (i = 0; i < A_COLS; i++)
 			{
-				if(inst == 1){
-					printf("%d ", X[i] );
-					printf("%d ", tmp[i] );
-					printf("%d ", (X[i] + FIELD_PRIME - tmp[i]) % FIELD_PRIME );
-				}
 				tmp[i] = (X[i] + FIELD_PRIME - tmp[i]) % FIELD_PRIME;
-				if(inst == 1){
-					printf("%d ",  tmp[i]  );
-					printf("%d \n", ( tmp[i] * c_inv ) );
-				}
 				V_pi_sigma[i] = ( tmp[i] * c_inv ) % FIELD_PRIME;
 			}
 
-			if(inst == 1){
-				printf("c_inv\n");
-				printf("%d\n", c_inv);
-				printf("blabla:\n");
-				print_hash(buffer_2);
-				printf("V_pi_sigma:\n");
-				for (int i = 0; i < A_COLS; ++i)
-				{
-					printf("%3d ", V_pi_sigma[i]);
-				}
-				printf("\n");
-			}
-
 			HASH(buffer_2,A_COLS*sizeof(uint16_t)+SEED_BYTES,commitments + (inst*2+1)*HASH_BYTES);
+
+			if( !is_permutation(v,V_pi_sigma)){
+				printf("Not a permutation of v! \n");
+				return -1;
+			}
 
 			memcpy(commitments + (2*inst)*HASH_BYTES, RESPONSE2_HASHES(response2) + inst*HASH_BYTES, HASH_BYTES);	
 		}
@@ -446,173 +454,9 @@ int check(const unsigned char *pk, const unsigned char *commitment, const uint16
 	unsigned char out[HASH_BYTES];
 	HASH(commitments,HASH_BYTES*2*ITERATIONS,out);
 
-	printf("first 4 commitments:\n");
-	print_hash(commitments + HASH_BYTES*0);
-	print_hash(commitments + HASH_BYTES*1);
-	print_hash(commitments + HASH_BYTES*2);
-	print_hash(commitments + HASH_BYTES*3);
-
-	printf("Final comparison:\n");
-	print_hash(out);
-	print_hash(commitment);
-
 	if(memcmp(out,commitment,HASH_BYTES) != 0){
+		printf("Hashes dont match! \n");
 		return -1;
 	}
 	return 0;
 }
-
-/*
-
-void OLDommit(const unsigned char *pk, const unsigned char *sk, const unsigned char *seeds, const unsigned char *helper, unsigned char *commitments){
-	uint16_t v[A_COLS];
-	uint16_t A[(A_COLS-1)*A_ROWS];
-	gen_v_and_A(PK_SEED(pk),v,A);
-
-	uint16_t *last_col = (uint16_t *) PK_A_LAST_COL(pk);
-
-	// expand secret key into a public seed and a permutation seed
-	unsigned char keygen_buf[SEED_BYTES*2];
-	EXPAND(SK_SEED(sk),SEED_BYTES,keygen_buf,SEED_BYTES*2);
-
-	// generate pi
-	unsigned char pi[A_COLS];
-	generate_permutation(keygen_buf + SEED_BYTES, pi);
-
-	int inst;
-	for (inst = 0; inst < SETUPS; inst++)
-	{
-		uint16_t buf[(A_COLS+1)/2 + A_ROWS] = {0};
-
-		// compute rho
-		compose_perm_ab_inv(pi,HELPER_SIGMA(helper) + inst*HELPER_BYTES, (unsigned char *) buf);
-
-		// compute A*r_rho
-		uint16_t *r = (uint16_t *)(HELPER_R(helper) + inst*HELPER_BYTES);
-		uint16_t r_rho[A_COLS];
-		permute_vector(r,(unsigned char *) buf,r_rho);
-
-		mat_mul(A,last_col,r_rho,buf + (A_COLS+1)/2);
-
-		HASH((unsigned char *) buf,((A_COLS+1)/2 + A_ROWS)*sizeof(uint16_t), commitments + inst*HASH_BYTES);
-	}
-}
-
-void compress_perms(const unsigned char *data, int len, unsigned char *out){
-	int cur_in = 0;
-	int cur_out = 0;
-	int bits  = 0;
-	uint32_t buf = 0;
-	while(cur_in<len || bits>=8){
-		if(bits >= 8){
-			out[cur_out++] = (unsigned char) buf;
-			bits -= 8;
-			buf >>= 8;
-		}
-		else{
-			buf |= (((uint32_t) data[cur_in++]) << bits);
-			bits += PERM_BITS;
-		}
-	}
-	if(bits > 0){
-	out[cur_out] = 0;
-	out[cur_out] |= (unsigned char) buf;
-	}
-}
-
-void decompress_perms(const unsigned char *data, int len , unsigned char *out){
-	int cur_in = 0;
-	int cur_out = 0;
-	int bits  = 0;
-	uint32_t buf = 0;
-	while(cur_out< len){
-		if(bits >= PERM_BITS){
-			out[cur_out++] = (((uint16_t)buf) & ((1<<PERM_BITS)-1) );
-			bits -= PERM_BITS;
-			buf >>= PERM_BITS;
-		}
-		else{
-			buf |= (((uint32_t) data[cur_in++]) << bits);
-			bits += 8;
-		}
-	}
-}
-
-void respond(const unsigned char *pk, const unsigned char *sk, const unsigned char *seeds, const unsigned char *indices, const uint16_t *challenges, const unsigned char *helper, unsigned char *responses){
-	uint16_t vectors[EXECUTIONS*A_COLS];
-	unsigned char perms[EXECUTIONS*A_COLS];
-
-	// expand secret key into a public seed and a permutation seed
-	unsigned char keygen_buf[SEED_BYTES*2];
-	EXPAND(SK_SEED(sk),SEED_BYTES,keygen_buf,SEED_BYTES*2);
-
-	// generate pi
-	unsigned char pi[A_COLS];
-	generate_permutation(keygen_buf + SEED_BYTES, pi);
-
-	int inst;
-	int executions_done = 0;
-	for(inst =0; inst <SETUPS; inst++){
-		if(indices[inst] == 0){
-			continue;
-		}
-
-		// compute rho
-		compose_perm_ab_inv(pi,HELPER_SIGMA(helper) + inst*HELPER_BYTES, perms + executions_done*A_COLS);
-
-		uint16_t *r = (uint16_t *)(HELPER_R(helper) + inst*HELPER_BYTES);
-		uint16_t *v_sigma = (uint16_t *)(HELPER_V_SIGMA(helper) + inst*HELPER_BYTES);
-
-		get_path(HELPER_TREE(helper) + inst*HELPER_BYTES, DEPTH, challenges[executions_done], RESPONSE_PATHS(responses) + PATH_BYTES*executions_done);
-
-		int i;
-		for(i=0; i<A_COLS; i++){
-			vectors[executions_done*A_COLS + i] = (uint16_t) ( (((uint32_t) r[i]) + ((uint32_t) challenges[executions_done])*((uint32_t) v_sigma[i]) ) % FIELD_PRIME );
-		}
-
-		executions_done ++;
-	}
-
-	compress_perms(perms,EXECUTIONS*A_COLS,RESPONSE_RHOS(responses));
-
-	compress_vecs(vectors,EXECUTIONS*A_COLS,RESPONSE_XS(responses));
-}
-
-void check(const unsigned char *pk, const unsigned char *indices, unsigned char *aux, unsigned char *commitments, const uint16_t *challenges, const unsigned char *responses){
-	uint16_t v[A_COLS];
-	uint16_t A[(A_COLS-1)*A_ROWS];
-	gen_v_and_A(PK_SEED(pk),v,A);
-
-	uint16_t *last_col = (uint16_t *) PK_A_LAST_COL(pk);
-
-	unsigned char perms[EXECUTIONS*A_COLS] = {0};
-	decompress_perms(RESPONSE_RHOS(responses),EXECUTIONS*A_COLS,perms);
-
-	uint16_t vectors[EXECUTIONS*A_COLS] = {0};
-	decompress_vecs(RESPONSE_XS(responses),EXECUTIONS*A_COLS,vectors);
-
-	int inst;
-	int executions_done = 0;
-	for(inst =0; inst <SETUPS; inst++){
-		if(indices[inst] == 0){
-			continue;
-		}
-
-		const unsigned char *rho = perms + A_COLS*executions_done;
-
-		uint16_t buf[(A_COLS+1)/2 + A_ROWS]= {0};
-		memcpy((unsigned char *)buf,rho,A_COLS);
-
-		uint16_t x_rho[A_COLS];
-		permute_vector(vectors + executions_done*A_COLS,rho,x_rho);
-
-		mat_mul(A,last_col,x_rho,buf + (A_COLS+1)/2);
-
-		HASH((unsigned char *)buf,(A_COLS+1)/2*2 + sizeof(uint16_t)*A_ROWS,commitments + inst*HASH_BYTES);
-
-		follow_path( (unsigned char *) (vectors + A_COLS*executions_done), LEAF_BYTES, DEPTH,RESPONSE_PATHS(responses) + executions_done*PATH_BYTES, challenges[executions_done], aux + HASH_BYTES*inst);
-
-		executions_done ++;
-	}
-
-} */
