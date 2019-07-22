@@ -15,6 +15,7 @@ uint64_t rdtsc(){
 
 
 void test(){
+
 	unsigned char pk[PK_BYTES] = {0};
 	unsigned char sk[SK_BYTES] = {0};
 	unsigned char state[STATE_BYTES] = {0};
@@ -44,7 +45,7 @@ void test(){
 
 	respond2(sk,pk,b,response2,state);
 
-	printf("check: %d \n", check(pk,commitment, c,response1,b,response2) );
+	printf("check: %d \n", check(pk,commitment, c,response1,b,response2) ); 
 }
 
 void main(){

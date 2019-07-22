@@ -1,6 +1,6 @@
 
-#include <openssl/sha.h>
-#include "libkeccak.a.headers/SimpleFIPS202.h"
+//#define BLAKE
+#define KECCAK
 
 #define SL1
 //#define SL3
@@ -139,12 +139,16 @@
 #define TREE_BYTES ((2*LEAVES-1)*HASH_BYTES)
 #define PATH_BYTES (DEPTH*HASH_BYTES)
 
-#define HASH(data,len,out) SHAKE128(out, HASH_BYTES, data, len);
-#define EXPAND(data,len,out,outlen) SHAKE128(out, outlen, data, len);
-
-#ifdef CHACHA
+#ifdef KECCAK
+	#include "libkeccak.a.headers/SimpleFIPS202.h"
 	#define HASH(data,len,out) SHAKE128(out, HASH_BYTES, data, len);
 	#define EXPAND(data,len,out,outlen) SHAKE128(out, outlen, data, len);
+#endif
+
+#ifdef BLAKE
+	#include "BLAKE2/sse/blake2.h"
+	#define HASH(data,len,out) blake2xb(out, HASH_BYTES, data, len,0,0);
+	#define EXPAND(data,len,out,outlen) blake2xb(out, outlen, data, len,0,0);
 #endif
 
 #define FIELD_MASK ((1<<FIELD_BITS) -1)

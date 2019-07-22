@@ -2,6 +2,7 @@
 #define ZKPROOF_H
 
 #include <openssl/rand.h>
+#include <string.h>
 #include <stdint.h>
 #include <stdio.h>
 #include "parameters.h"
