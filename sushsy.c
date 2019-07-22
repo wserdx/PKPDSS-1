@@ -213,6 +213,18 @@ void commit(const unsigned char *sk, const unsigned char *pk, unsigned char *com
 	uint16_t A[(A_COLS-1)*A_ROWS];
 	gen_v_and_A(PK_SEED(pk),v,A);
 
+	// expand secret key into a public seed and a permutation seed
+	unsigned char keygen_buf[SEED_BYTES*2];
+	EXPAND(SK_SEED(sk),SEED_BYTES,keygen_buf,SEED_BYTES*2);
+
+	// generate pi
+	unsigned char pi[A_COLS];
+	generate_permutation(keygen_buf + SEED_BYTES, pi);
+
+	// compute v_pi
+	uint16_t v_pi[A_COLS];
+	permute_vector(v,pi,v_pi);
+
 	unsigned char master_seed[SEED_BYTES];
 	RAND_bytes(master_seed,SEED_BYTES);
 
@@ -239,18 +251,30 @@ void commit(const unsigned char *sk, const unsigned char *pk, unsigned char *com
 		// compute AR
 		mat_mul(A,(uint16_t *) PK_A_LAST_COL(pk), R, AR);
 
-		if(inst == 1){
-			print_hash(buffer_1);
-		}
-
 		// compute c0
 		HASH(buffer_1, A_ROWS*sizeof(uint16_t) + A_COLS, commitments + inst*2*HASH_BYTES);
 
-		// copmute c1
-		unsigned char buffer_2[1+SEED_BYTES];
-		buffer_2[0] = 0;
-		memcpy(buffer_2+1,STATE_SEEDS(state) + SEED_BYTES*(2*inst+1),SEED_BYTES);
-		HASH(buffer_2,SEED_BYTES+1,commitments + (inst*2+1)*HASH_BYTES);
+		// compute v_pi_sigma
+		permute_vector(v_pi,sigma,(uint16_t *) (STATE_VPISIGMA(state) + inst*A_COLS*sizeof(uint16_t)));
+
+		// compute c1
+		unsigned char buffer_2[A_COLS*sizeof(uint16_t)+SEED_BYTES];
+		memcpy(buffer_2, STATE_VPISIGMA(state) + inst*A_COLS*sizeof(uint16_t), A_COLS*sizeof(uint16_t));
+		memcpy(buffer_2+A_COLS*sizeof(uint16_t),STATE_SEEDS(state) + SEED_BYTES*(2*inst+1),SEED_BYTES);
+		HASH(buffer_2,A_COLS*sizeof(uint16_t)+SEED_BYTES,commitments + (inst*2+1)*HASH_BYTES);
+
+		uint16_t *V_pi_sigma = (uint16_t *) buffer_2;
+		if(inst == 1){
+			printf("blabla:\n");
+			print_hash(buffer_2);
+
+			printf("V_pi_sigma:\n");
+			for (int i = 0; i < A_COLS; ++i)
+			{
+				printf("%d ", V_pi_sigma[i]);
+			}
+			printf("\n");
+		}
 	}
 
 	printf("first 4 commitments:\n");
@@ -268,18 +292,6 @@ void respond1(const unsigned char *sk, const unsigned char *pk, uint16_t *c, uns
 	uint16_t A[(A_COLS-1)*A_ROWS];
 	gen_v_and_A(PK_SEED(pk),v,A);
 
-	// expand secret key into a public seed and a permutation seed
-	unsigned char keygen_buf[SEED_BYTES*2];
-	EXPAND(SK_SEED(sk),SEED_BYTES,keygen_buf,SEED_BYTES*2);
-
-	// generate pi
-	unsigned char pi[A_COLS];
-	generate_permutation(keygen_buf + SEED_BYTES, pi);
-
-	// copmute v_pi
-	uint16_t v_pi[A_COLS];
-	permute_vector(v,pi,v_pi);
-
 	int inst;
 	for (inst =0; inst < ITERATIONS; inst++){
 		uint16_t* resp = (uint16_t *) (response1 + inst*A_COLS*sizeof(uint16_t));
@@ -290,13 +302,9 @@ void respond1(const unsigned char *sk, const unsigned char *pk, uint16_t *c, uns
 		unsigned char sigma[A_COLS];
 		generate_permutation(STATE_SEEDS(state) + SEED_BYTES*2*inst, sigma);
 
-		// compute v_pi_sigma
-		uint16_t tmp[A_COLS];
-		permute_vector(v_pi,sigma,tmp);
-
 		int i;
 		for (i=0; i<A_COLS; i++){
-			resp[i] = (resp[i] + tmp[i]*c[inst]) % FIELD_PRIME;
+			resp[i] = (resp[i] + (STATE_VPISIGMA(state) + inst*A_COLS*sizeof(uint16_t))[i]*c[inst]) % FIELD_PRIME;
 		}
 	}
 }
@@ -389,33 +397,49 @@ int check(const unsigned char *pk, const unsigned char *commitment, const uint16
 		else{
 
 			// compute c1
-			unsigned char buffer_2[1+SEED_BYTES];
-			buffer_2[0] = 0;
-			memcpy(buffer_2+1,RESPONSE2_SEEDS(response2) + SEED_BYTES*inst, SEED_BYTES);
-			HASH(buffer_2,SEED_BYTES+1,commitments + (inst*2+1)*HASH_BYTES);
-
-			memcpy(commitments + (2*inst)*HASH_BYTES, RESPONSE2_HASHES(response2) + inst*HASH_BYTES, HASH_BYTES);	
+			unsigned char buffer_2[A_COLS*sizeof(uint16_t)+SEED_BYTES];
+			uint16_t *V_pi_sigma = (uint16_t *) buffer_2;
+			memcpy(buffer_2+A_COLS*sizeof(uint16_t),RESPONSE2_SEEDS(response2) + SEED_BYTES*inst, SEED_BYTES);
+			
 
 			// compute if X-R_sigma is permutation of c*V
 			uint16_t tmp[A_COLS];
 			generate_vector(RESPONSE2_SEEDS(response2) + SEED_BYTES*inst, tmp);
 
-			int count[FIELD_PRIME] = {0};
+			uint16_t c_inv = (FIELD_PRIME - minus_inverse(c[inst])) % FIELD_PRIME;
 
 			int i;
 			for (i = 0; i < A_COLS; i++)
 			{
+				if(inst == 1){
+					printf("%d ", X[i] );
+					printf("%d ", tmp[i] );
+					printf("%d ", (X[i] + FIELD_PRIME - tmp[i]) % FIELD_PRIME );
+				}
 				tmp[i] = (X[i] + FIELD_PRIME - tmp[i]) % FIELD_PRIME;
-				count[tmp[i]] ++;
+				if(inst == 1){
+					printf("%d ",  tmp[i]  );
+					printf("%d \n", ( tmp[i] * c_inv ) );
+				}
+				V_pi_sigma[i] = ( tmp[i] * c_inv ) % FIELD_PRIME;
 			}
 
-			for (i = 0; i < A_COLS; i++){
-				uint16_t tmp = (c[inst]*v[i])%FIELD_PRIME;
-				count[tmp] --;
-				if (count[tmp] < 0){
-					return -1;
-				} 
+			if(inst == 1){
+				printf("c_inv\n");
+				printf("%d\n", c_inv);
+				printf("blabla:\n");
+				print_hash(buffer_2);
+				printf("V_pi_sigma:\n");
+				for (int i = 0; i < A_COLS; ++i)
+				{
+					printf("%3d ", V_pi_sigma[i]);
+				}
+				printf("\n");
 			}
+
+			HASH(buffer_2,A_COLS*sizeof(uint16_t)+SEED_BYTES,commitments + (inst*2+1)*HASH_BYTES);
+
+			memcpy(commitments + (2*inst)*HASH_BYTES, RESPONSE2_HASHES(response2) + inst*HASH_BYTES, HASH_BYTES);	
 		}
 	}
 

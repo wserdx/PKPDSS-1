@@ -27,7 +27,8 @@
 #define STATE_R_SIGMA(state) (state)
 #define STATE_SEEDS(state) (state + ITERATIONS*A_COLS*sizeof(uint16_t))
 #define STATE_HASHES(state) (STATE_SEEDS(state) + SEED_BYTES*2*ITERATIONS)
-#define STATE_BYTES (STATE_HASHES(0)+ HASH_BYTES*2*ITERATIONS)
+#define STATE_VPISIGMA(state) (STATE_HASHES(state) + HASH_BYTES*2*ITERATIONS)
+#define STATE_BYTES (STATE_VPISIGMA(0) + ITERATIONS*A_COLS*sizeof(uint16_t) )
 
 
 #define RESPONSE1_BYTES (A_COLS*sizeof(uint16_t)*ITERATIONS)

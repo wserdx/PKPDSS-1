@@ -11,7 +11,7 @@
 
 	#define A_COLS 61
 	#define A_ROWS 28
-	#define FIELD_PRIME 977
+	#define FIELD_PRIME ((uint16_t) 977)
 	#define FIELD_BITS 10
 	#define PERM_BITS 6
 	#define SEED_BYTES 16
