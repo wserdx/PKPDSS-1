@@ -26,7 +26,7 @@ void print_hash(const unsigned char *hash){
 	printf("\n");
 }
 
-#define PERM_RANDOMNESS_LEN A_COLS*2
+#define PERM_RANDOMNESS_LEN (A_COLS*2+30)
 void generate_permutation(const unsigned char *seed, unsigned char *permutation){
 	int i=0;
 
