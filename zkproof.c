@@ -1,5 +1,5 @@
 #include "zkproof.h"
-
+#include "uint32_sort.h"
 
 static inline
 uint64_t rdtsc(){
@@ -78,6 +78,46 @@ void generate_vector(const unsigned char *seed, uint16_t *vec){
 		if(cur_rand >= VEC_RANDOMNESS_LEN){
 			printf("NOT ENOUGH RANDOMNESS! \n");
 		}
+	}
+}
+
+void permute_vector_ct(const uint16_t *vec, const unsigned char *permutation, uint16_t *out){
+	uint32_t list[A_COLS] = {0};
+	int i;
+	for (i = 0; i < A_COLS; ++i)
+	{
+		list[i] = (((uint32_t) permutation[i]) << 16) | (uint32_t) vec[i];
+	}
+
+	uint32_sort(list, A_COLS);
+
+	for (i = 0; i < A_COLS; ++i)
+	{
+		out[i] = (uint16_t) list[i];
+	}
+}
+
+void unpermute_vector_ct(const uint16_t *vec, const unsigned char *permutation, uint16_t *out){
+	uint32_t list1[A_COLS] = {0};
+	uint32_t list2[A_COLS] = {0};
+	int i;
+	for (i = 0; i < A_COLS; ++i)
+	{
+		list1[i] = (((uint32_t) permutation[i]) << 16) | (uint32_t) i;
+	}
+
+	uint32_sort(list1, A_COLS);
+
+	for (i = 0; i < A_COLS; ++i)
+	{
+		list2[i] = ( list1[i] << 16) | (uint32_t) vec[i];
+	}
+
+	uint32_sort(list2, A_COLS);
+
+	for (i = 0; i < A_COLS; ++i)
+	{
+		out[i] = (uint16_t) list2[i];
 	}
 }
 
@@ -171,7 +211,7 @@ void get_last_col(uint16_t *v, uint16_t *A, unsigned char *permutation_seed, uin
 
 	// compute v_pi
 	uint16_t v_pi[A_COLS];
-	permute_vector(v,pi,v_pi);
+	permute_vector_ct(v,pi,v_pi);
 
 	// compute last col
 	uint32_t last_col[A_ROWS] = {0};
@@ -244,7 +284,7 @@ void commit(const unsigned char *sk, const unsigned char *pk, unsigned char *com
 
 	// compute v_pi
 	uint16_t v_pi[A_COLS];
-	permute_vector(v,pi,v_pi);
+	permute_vector_ct(v,pi,v_pi);
 
 	unsigned char master_seed[SEED_BYTES];
 	RAND_bytes(master_seed,SEED_BYTES);
@@ -267,7 +307,7 @@ void commit(const unsigned char *sk, const unsigned char *pk, unsigned char *com
 
 		// compute R, from R_sigma and sigma
 		uint16_t R[A_COLS];
-		unpermute_vector((uint16_t *)(STATE_R_SIGMA(state) + inst*A_COLS*sizeof(uint16_t)), sigma, R);
+		unpermute_vector_ct((uint16_t *)(STATE_R_SIGMA(state) + inst*A_COLS*sizeof(uint16_t)), sigma, R);
 
 		// compute AR
 		mat_mul(A,(uint16_t *) PK_A_LAST_COL(pk), R, AR);
@@ -276,7 +316,7 @@ void commit(const unsigned char *sk, const unsigned char *pk, unsigned char *com
 		HASH(buffer_1, A_ROWS*sizeof(uint16_t) + A_COLS, commitments + inst*2*HASH_BYTES);
 
 		// compute v_pi_sigma
-		permute_vector(v_pi,sigma,(uint16_t *) (STATE_VPISIGMA(state) + inst*A_COLS*sizeof(uint16_t)));
+		permute_vector_ct(v_pi,sigma,(uint16_t *) (STATE_VPISIGMA(state) + inst*A_COLS*sizeof(uint16_t)));
 
 		// compute c1
 		unsigned char buffer_2[A_COLS*sizeof(uint16_t)+SEED_BYTES];

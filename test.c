@@ -16,36 +16,7 @@ uint64_t rdtsc(){
 
 void test(){
 
-	unsigned char pk[PK_BYTES] = {0};
-	unsigned char sk[SK_BYTES] = {0};
-	unsigned char state[STATE_BYTES] = {0};
-	unsigned char commitment[HASH_BYTES] = {0};
-	unsigned char response1[RESPONSE1_BYTES] = {0};
-	unsigned char response2[RESPONSE2_BYTES] = {0};
-
-	printf("pk bytes : %ld\n", PK_BYTES );
-	printf("sk bytes : %d\n", SK_BYTES );
-
-	keygen(pk,sk);
-
-	commit(sk,pk,commitment,state);
-
-	uint16_t c[ITERATIONS] = {0};
-	unsigned char b[ITERATIONS] = {0};
-
-	int i;
-	for (i=0; i<ITERATIONS; i++){
-		c[i] = 5+i;
-		b[i] = i;
-	}
-	c[0] = 0;
-	c[1] = 0;
 	
-	respond1(sk,pk,c,response1,state);
-
-	respond2(sk,pk,b,response2,state);
-
-	printf("check: %d \n", check(pk,commitment, c,response1,b,response2) ); 
 }
 
 void main(){
