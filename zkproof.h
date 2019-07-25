@@ -12,7 +12,7 @@
 
 #define PK_SEED(pk) (pk)
 #define PK_A_LAST_COL(pk) (pk+SEED_BYTES)
-#define PK_BYTES (PK_A_LAST_COL(0) + A_ROWS*2)
+#define PK_BYTES (PK_A_LAST_COL(0) + (A_ROWS*FIELD_BITS+7)/8)
 
 #define STATE_R_SIGMA(state) (state)
 #define STATE_SEEDS(state) (state + ITERATIONS*A_COLS*sizeof(uint16_t))

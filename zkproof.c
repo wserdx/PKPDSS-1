@@ -60,6 +60,45 @@ void generate_permutation(const unsigned char *seed, unsigned char *permutation)
 	}
 }
 
+void compress_vecs(const uint16_t *data, int len, unsigned char *out){
+	int cur_in = 0;
+	int cur_out = 0;
+	int bits  = 0;
+	uint32_t buf = 0;
+	while(cur_in<len || bits>=8){
+		if(bits >= 8){
+			out[cur_out++] = (unsigned char) buf;
+			bits -= 8;
+			buf >>= 8;
+		}
+		else{
+			buf |= (((uint32_t) data[cur_in++]) << bits);
+			bits += FIELD_BITS;
+		}
+	}
+	if(bits > 0){
+	out[cur_out] = 0;
+	out[cur_out] |= (unsigned char) buf;
+	}
+} 
+
+void decompress_vecs(const unsigned char *data, int len , uint16_t *out){
+	int cur_in = 0;
+	int cur_out = 0;
+	int bits  = 0;
+	uint32_t buf = 0;
+	while(cur_out< len){
+		if(bits >= FIELD_BITS){
+			out[cur_out++] = (((uint16_t)buf) & FIELD_MASK);
+			bits -= FIELD_BITS;
+			buf >>= FIELD_BITS;
+		}
+		else{
+			buf |= (((uint32_t) data[cur_in++]) << bits);
+			bits += 8;
+		}
+	}
+} 
 
 //#define RANDOMNESS_LEN (A_COLS*3+50)
 #define VEC_RANDOMNESS_LEN A_COLS*2
@@ -264,15 +303,23 @@ void keygen(unsigned char *pk, unsigned char *sk){
 	uint16_t v[A_COLS];
 	uint16_t A[(A_COLS-1)*A_ROWS];
 	gen_v_and_A(PK_SEED(pk),v,A);
-	
+
 	// compute last column of A
-	get_last_col(v,A,keygen_buf + SEED_BYTES, (uint16_t *) PK_A_LAST_COL(pk));
+	uint16_t last_col[A_ROWS];
+	get_last_col(v,A,keygen_buf + SEED_BYTES, last_col);
+
+	// compress last column
+	compress_vecs(last_col,A_ROWS, PK_A_LAST_COL(pk));
 }
 
 void commit(const unsigned char *sk, const unsigned char *pk, unsigned char *commitment, unsigned char *state){
 	uint16_t v[A_COLS];
 	uint16_t A[(A_COLS-1)*A_ROWS];
 	gen_v_and_A(PK_SEED(pk),v,A);
+
+	// expand last column
+	uint16_t last_col[A_ROWS];
+	decompress_vecs(PK_A_LAST_COL(pk), A_ROWS,last_col);
 
 	// expand secret key into a public seed and a permutation seed
 	unsigned char keygen_buf[SEED_BYTES*2];
@@ -310,7 +357,7 @@ void commit(const unsigned char *sk, const unsigned char *pk, unsigned char *com
 		unpermute_vector_ct((uint16_t *)(STATE_R_SIGMA(state) + inst*A_COLS*sizeof(uint16_t)), sigma, R);
 
 		// compute AR
-		mat_mul(A,(uint16_t *) PK_A_LAST_COL(pk), R, AR);
+		mat_mul(A,last_col , R, AR);
 
 		// compute c0
 		HASH(buffer_1, A_ROWS*sizeof(uint16_t) + A_COLS, commitments + inst*2*HASH_BYTES);
@@ -330,46 +377,6 @@ void commit(const unsigned char *sk, const unsigned char *pk, unsigned char *com
 	// combine all the commitments
 	HASH(commitments,HASH_BYTES*2*ITERATIONS, commitment);
 }
-
-void compress_vecs(const uint16_t *data, int len, unsigned char *out){
-	int cur_in = 0;
-	int cur_out = 0;
-	int bits  = 0;
-	uint32_t buf = 0;
-	while(cur_in<len || bits>=8){
-		if(bits >= 8){
-			out[cur_out++] = (unsigned char) buf;
-			bits -= 8;
-			buf >>= 8;
-		}
-		else{
-			buf |= (((uint32_t) data[cur_in++]) << bits);
-			bits += FIELD_BITS;
-		}
-	}
-	if(bits > 0){
-	out[cur_out] = 0;
-	out[cur_out] |= (unsigned char) buf;
-	}
-} 
-
-void decompress_vecs(const unsigned char *data, int len , uint16_t *out){
-	int cur_in = 0;
-	int cur_out = 0;
-	int bits  = 0;
-	uint32_t buf = 0;
-	while(cur_out< len){
-		if(bits >= FIELD_BITS){
-			out[cur_out++] = (((uint16_t)buf) & FIELD_MASK);
-			bits -= FIELD_BITS;
-			buf >>= FIELD_BITS;
-		}
-		else{
-			buf |= (((uint32_t) data[cur_in++]) << bits);
-			bits += 8;
-		}
-	}
-} 
 
 void respond1(const unsigned char *sk, const unsigned char *pk, uint16_t *c, unsigned char *response1, unsigned char *state){
 	uint16_t v[A_COLS];
@@ -432,7 +439,9 @@ int check(const unsigned char *pk, const unsigned char *commitment, const uint16
 	uint16_t A[(A_COLS-1)*A_ROWS];
 	gen_v_and_A(PK_SEED(pk),v,A);
 
-	uint16_t *last_col = (uint16_t *) PK_A_LAST_COL(pk);
+	// expand last column
+	uint16_t last_col[A_ROWS];
+	decompress_vecs(PK_A_LAST_COL(pk),A_ROWS,last_col);
 
 	unsigned char commitments[HASH_BYTES*2*ITERATIONS];
 
