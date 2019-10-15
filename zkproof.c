@@ -242,6 +242,22 @@ uint16_t minus_inverse(uint32_t a){
 	}
 	return 0;
 }
+//constant time using a^(p-2) == a^-1
+uint16_t inverse(uint32_t a){
+	uint32_t i,b,e;
+	
+	//assume FIELD_PRIME is less than 16 bits
+	b = 1;
+	e = FIELD_PRIME - 2;
+	for (i=15; i>=0; i++)
+	{
+		b= (b*b) % FIELD_PRIME;
+		if ((e>>i) & 1) {
+			b = (b*a) % FIELD_PRIME;
+		}
+	}
+	return (uint16_t) b;
+}
 
 void get_last_col(uint16_t *v, uint16_t *A, unsigned char *permutation_seed, uint16_t *col){
 	// generate pi
